@@ -6,6 +6,7 @@ from typing import Dict, Any, List
 import httpx
 from fastapi import FastAPI, Request, HTTPException
 from tenacity import retry, stop_after_attempt, wait_fixed
+from contextlib import asynccontextmanager
 
 # -----------------------------
 # Config
@@ -24,11 +25,24 @@ QUEUE_SIZE = 1000
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("alert_bridge")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    for _ in range(WORKER_COUNT):
+        asyncio.create_task(alert_worker())
+    logger.info("Alert workers started")
+
+    yield  # App is running
+
+    # Shutdown (optional)
+    logger.info("Shutting down...")
+
 # -----------------------------
 # FastAPI
 # -----------------------------
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 alert_queue: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_SIZE)
 zabbix_token: str | None = None
@@ -221,15 +235,3 @@ async def alertmanager_webhook(request: Request):
 
     return {"status": "queued", "alerts": len(payload["alerts"])}
 
-
-# -----------------------------
-# Startup
-# -----------------------------
-
-@app.on_event("startup")
-async def startup():
-
-    for _ in range(WORKER_COUNT):
-        asyncio.create_task(alert_worker())
-
-    logger.info("Alert workers started")
